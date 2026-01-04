@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<StyleConfig>
+
+    <!-- Exposición / brillo -->
+    <Brightness>0.5</Brightness>          <!-- -2.0 a 2.0 -->
+
+    <!-- Saturación global -->
+    <Saturation>1.15</Saturation>         <!-- 0.0 a 2.0 -->
+
+    <!-- Contraste -->
+    <Contrast>1.1</Contrast>              <!-- 0.0 a 2.0 -->
+
+    <!-- Temperatura de color -->
+    <ColorTemperature>6500</ColorTemperature> <!-- 1000 a 10000 -->
+
+    <!-- Matiz global -->
+    <Hue>5</Hue>                          <!-- -180 a 180 -->
+
+    <!-- Tinte base -->
+    <Tint>
+        <Color>#FFCC00</Color>
+        <Opacity>0.05</Opacity>
+        <BlendMode>overlay</BlendMode>
+    </Tint>
+
+    <!-- Canales RGB individuales -->
+    <RGB>
+        <Red>1.05</Red>
+        <Green>1.00</Green>
+        <Blue>0.95</Blue>
+    </RGB>
+
+    <!-- Curvas simples -->
+    <Gamma>1.02</Gamma>                   <!-- 0.1 a 3.0 -->
+
+    <!-- Sombras y luces -->
+    <Shadows>0.9</Shadows>                <!-- 0.0 a 2.0 -->
+    <Highlights>1.1</Highlights>          <!-- 0.0 a 2.0 -->
+
+    <!-- Vibrance (menos agresivo que saturación) -->
+    <Vibrance>0.2</Vibrance>              <!-- -1.0 a 1.0 -->
+
+</StyleConfig>

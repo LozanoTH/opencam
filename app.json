@@ -1,12 +1,15 @@
 {
   "expo": {
-    "name": "miApp",
+    "name": "OpenCam",
     "slug": "miApp",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "miapp",
     "userInterfaceStyle": "automatic",
+    "androidStatusBar": {
+      "translucent": true
+    },
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true
@@ -29,8 +32,18 @@
         "android.permission.ACCESS_MEDIA_LOCATION",
         "android.permission.READ_MEDIA_IMAGES",
         "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.ACCESS_MEDIA_LOCATION",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
         "android.permission.READ_MEDIA_AUDIO"
-      ]
+      ],
+      "package": "com.cman.android"
     },
     "web": {
       "output": "static",
@@ -65,7 +78,8 @@
           "isAccessMediaLocationEnabled": true,
           "audioPermission": "Allow $(PRODUCT_NAME) to access your audio."
         }
-      ]
+      ],
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,
@@ -76,6 +90,12 @@
       "eas": {
         "projectId": "aaa876e6-babc-4f1b-9388-fc82a30b3a5c"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/aaa876e6-babc-4f1b-9388-fc82a30b3a5c"
     }
   }
 }
