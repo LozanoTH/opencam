@@ -1,415 +1,334 @@
-import { Ionicons } from '@expo/vector-icons';
 import Slider from '@react-native-community/slider';
-import { Asset } from 'expo-asset';
-import { BlurView } from 'expo-blur';
-import { CameraType, CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
-import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system/legacy';
+import { CameraView } from 'expo-camera';
+import * as FileSystem from 'expo-file-system';
+import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
-import { XMLParser } from 'fast-xml-parser';
-import { useEffect, useRef, useState } from 'react';
-import { Alert, Animated, Button, Dimensions, Image, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-
+import { Download, X } from 'lucide-react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+    Alert,
+    Animated,
+    Dimensions,
+    Modal,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View
+} from 'react-native';
 
 const { width, height } = Dimensions.get('window');
 
-/**
- * Genera una matriz de color 4x5 basada en los filtros avanzados del XML
- * Expo Image Manipulator usa un array de 20 elementos.
- */
-function createColorMatrix(config: any) {
-    const { saturation, contrast, rgb } = config;
+import { BottomBar } from '../components/BottomBar';
+import { ModeSelector } from '../components/ModeSelector';
+import { Preview } from '../components/Preview';
+import { TopBar } from '../components/TopBar';
+import { ZoomControls } from '../components/ZoomControls';
+import { useCamera } from '../hooks/useCamera';
+import { applyFilters, FilterSettings, parseStyleXml, serializeStyleXml } from '../utils/filterEngine';
 
-    // Matriz de Identidad Base
-    let matrix = [
-        1, 0, 0, 0, 0,
-        0, 1, 0, 0, 0,
-        0, 0, 1, 0, 0,
-        0, 0, 0, 1, 0
-    ];
+export default function HomeScreen() {
+    const {
+        permission,
+        hasMediaLibraryPermission,
+        cameraRef,
+        flash,
+        zoom,
+        facing,
+        ratio,
+        timer,
+        isCountingDown,
+        isRecording,
+        recordingDuration,
+        setZoom,
+        setRatio,
+        setTimer,
+        toggleFlash,
+        toggleFacing,
+        takePictureWithTimer,
+        startRecording,
+        stopRecording,
+    } = useCamera();
 
-    // 1. Aplicar Escala RGB
-    matrix[0] *= rgb.red;
-    matrix[6] *= rgb.green;
-    matrix[12] *= rgb.blue;
-
-    // 2. Aplicar Saturación (Pesos luma estándar)
-    const rw = 0.3086, gw = 0.6094, bw = 0.0820;
-    const invS = 1 - saturation;
-    const rL = rw * invS, gL = gw * invS, bL = bw * invS;
-
-    const satMatrix = [
-        rL + saturation, gL, bL, 0, 0,
-        rL, gL + saturation, bL, 0, 0,
-        rL, gL, bL + saturation, 0, 0,
-        0, 0, 0, 1, 0
-    ];
-
-    // Combinación simple (multiplicación de diagonal por saturación)
-    // Para simplificar y evitar errores de precisión manual, aplicaremos acciones secuenciales
-    return satMatrix;
-}
-
-export default function App() {
-    const [facing, setFacing] = useState<CameraType>('back');
-    const [mode, setMode] = useState<'picture' | 'video'>('picture');
-    const [zoom, setZoom] = useState(0);
-    const [isRecording, setIsRecording] = useState(false);
-
-    // Filtros desde XML
-    const [filterConfig, setFilterConfig] = useState({
+    const [processedPhoto, setProcessedPhoto] = useState<string | null>(null);
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [activeMode, setActiveMode] = useState('Foto');
+    const [countdown, setCountdown] = useState(0);
+    const [isSettingsVisible, setIsSettingsVisible] = useState(false);
+    const [filterSettings, setFilterSettings] = useState<FilterSettings>({
         brightness: 0,
         saturation: 1,
         contrast: 1,
-        colorTemperature: 6500,
-        hue: 0,
-        tint: 'transparent',
-        tintOpacity: 0,
-        tintBlendMode: 'overlay',
-        rgb: { red: 1, green: 1, blue: 1 },
-        gamma: 1,
-        shadows: 1,
-        highlights: 1,
-        vibrance: 0
+        rotation: 0,
+        compress: 0.9,
+        preset: 'default'
     });
 
-    // Permisos
-    const [cameraPermission, requestCameraPermission] = useCameraPermissions();
-    const [microphonePermission, requestMicrophonePermission] = useMicrophonePermissions();
-
-    // Estados UI
-    const [lastPhoto, setLastPhoto] = useState<string | null>(null);
-    const [lastAssetId, setLastAssetId] = useState<string | null>(null);
-    const [isPreviewOpen, setIsPreviewOpen] = useState(false);
-    const cameraRef = useRef<CameraView>(null);
-
-    // Animaciones
-    const centerAnim = useRef(new Animated.Value(0)).current;
-    const centerSlide = useRef(new Animated.Value(50)).current;
-    const sideAnim = useRef(new Animated.Value(0)).current;
-    const sideSlide = useRef(new Animated.Value(50)).current;
-
+    // Cargar ajustes iniciales desde style.xml
     useEffect(() => {
-        animateButtons();
-        loadFilterConfig();
-        if (!microphonePermission) requestMicrophonePermission();
+        const loadSettings = async () => {
+            try {
+                const fs = FileSystem as any;
+                const xmlPath = fs.documentDirectory ? fs.documentDirectory + 'style.xml' : '';
+                const xmlContent = await FileSystem.readAsStringAsync(xmlPath);
+                setFilterSettings(parseStyleXml(xmlContent));
+            } catch (e) {
+                // Si no existe, usamos los valores por defecto
+            }
+        };
+        loadSettings();
     }, []);
 
-    const parseXMLContent = (xmlContent: string) => {
-        const parser = new XMLParser();
-        const jsonObj = parser.parse(xmlContent);
+    const fadeAnim = useRef(new Animated.Value(1)).current;
 
-        // El nuevo root es StyleConfig
-        const config = jsonObj?.StyleConfig || jsonObj?.style || {};
+    const handleCapture = async () => {
+        if (isProcessing) return;
 
-        setFilterConfig({
-            brightness: parseFloat(config.Brightness || config.brightness || 0),
-            saturation: parseFloat(config.Saturation || 1),
-            contrast: parseFloat(config.Contrast || 1),
-            colorTemperature: parseFloat(config.ColorTemperature || 6500),
-            hue: parseFloat(config.Hue || 0),
-            tint: config.Tint?.Color || config.tint || 'transparent',
-            tintOpacity: parseFloat(config.Tint?.Opacity || config.tintOpacity || 0),
-            tintBlendMode: config.Tint?.BlendMode || 'overlay',
-            rgb: {
-                red: parseFloat(config.RGB?.Red || 1),
-                green: parseFloat(config.RGB?.Green || 1),
-                blue: parseFloat(config.RGB?.Blue || 1)
-            },
-            gamma: parseFloat(config.Gamma || 1),
-            shadows: parseFloat(config.Shadows || 1),
-            highlights: parseFloat(config.Highlights || 1),
-            vibrance: parseFloat(config.Vibrance || 0)
-        });
-    };
-
-    const loadFilterConfig = async () => {
-        try {
-            const asset = Asset.fromModule(require('../assets/style.xml'));
-            await asset.downloadAsync();
-            if (asset.localUri) {
-                const xmlContent = await FileSystem.readAsStringAsync(asset.localUri);
-                parseXMLContent(xmlContent);
+        if (activeMode === 'Vídeo') {
+            if (isRecording) {
+                await stopRecording();
+            } else {
+                const video = await startRecording();
+                if (video) {
+                    setProcessedPhoto(video.uri);
+                }
             }
-        } catch (error) {
-            console.error("Error cargando style.xml defecto:", error);
+            return;
+        }
+
+        if (timer > 0) {
+            let timeLeft = timer;
+            setCountdown(timeLeft);
+            const interval = setInterval(() => {
+                timeLeft -= 1;
+                setCountdown(timeLeft);
+                if (timeLeft <= 0) {
+                    clearInterval(interval);
+                    setCountdown(0);
+                }
+            }, 1000);
+        }
+
+        const photo = await takePictureWithTimer();
+        if (photo) {
+            setIsProcessing(true);
+
+            // Flash animation
+            Animated.sequence([
+                Animated.timing(fadeAnim, { toValue: 0, duration: 50, useNativeDriver: true }),
+                Animated.timing(fadeAnim, { toValue: 1, duration: 150, useNativeDriver: true }),
+            ]).start();
+
+            try {
+                // Solo aplicamos filtros en modo Foto y Retrato
+                if (activeMode === 'Foto' || activeMode === 'Retrato') {
+                    const result = await applyFilters(photo.uri, filterSettings);
+                    setProcessedPhoto(result.uri);
+                } else {
+                    setProcessedPhoto(photo.uri);
+                }
+            } catch (error) {
+                Alert.alert("Error", "No se pudo procesar la imagen.");
+            } finally {
+                setIsProcessing(false);
+            }
         }
     };
 
-    const pickCustomConfig = async () => {
+    const handleSave = async () => {
+        if (processedPhoto) {
+            try {
+                await MediaLibrary.saveToLibraryAsync(processedPhoto);
+                Alert.alert("Éxito", "¡Imagen guardada en la galería!");
+                setProcessedPhoto(null);
+            } catch (error) {
+                Alert.alert("Error", "No se pudo guardar la imagen.");
+            }
+        }
+    };
+
+    const handleOpenGallery = async () => {
         try {
-            const result = await DocumentPicker.getDocumentAsync({
-                type: 'text/xml',
-                copyToCacheDirectory: true
+            const result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ['images'],
+                allowsEditing: true,
+                aspect: [4, 3],
+                quality: 1,
             });
 
-            if (!result.canceled && result.assets && result.assets[0]) {
-                const xmlContent = await FileSystem.readAsStringAsync(result.assets[0].uri);
-                parseXMLContent(xmlContent);
-                Alert.alert("Éxito", "Configuración cargada correctamente");
+            if (!result.canceled) {
+                // We could also apply filters to gallery images if desired
+                setProcessedPhoto(result.assets[0].uri);
             }
         } catch (error) {
-            console.error("Error picking document:", error);
+            Alert.alert("Error", "No se pudo abrir la galería.");
         }
     };
 
-    const animateButtons = () => {
-        Animated.parallel([
-            Animated.parallel([
-                Animated.timing(centerAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
-                Animated.timing(centerSlide, { toValue: 0, duration: 600, useNativeDriver: true })
-            ]),
-            Animated.sequence([
-                Animated.delay(300),
-                Animated.parallel([
-                    Animated.timing(sideAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
-                    Animated.timing(sideSlide, { toValue: 0, duration: 600, useNativeDriver: true })
-                ])
-            ])
-        ]).start();
-    };
+    if (!permission || hasMediaLibraryPermission === null) {
+        return <View style={styles.container} />;
+    }
 
-    if (!cameraPermission || !microphonePermission) return <View />;
-
-    if (!cameraPermission.granted) {
+    if (!permission.granted || !hasMediaLibraryPermission) {
         return (
-            <View style={styles.container}>
-                <Text style={styles.message}>Permiso de Cámara requerido</Text>
-                <Button onPress={requestCameraPermission} title="Conceder Permiso" />
+            <View style={styles.centered}>
+                <Text style={styles.infoText}>Faltan permisos</Text>
             </View>
         );
     }
 
-    function toggleCameraFacing() {
-        setFacing(current => (current === 'back' ? 'front' : 'back'));
+    // Calculate camera height based on ratio
+    const screenWidth = width - 16;
+    let cameraHeight = screenWidth * (4 / 3); // Default 4:3
+    if (ratio === '16:9') {
+        cameraHeight = screenWidth * (16 / 9);
+    } else if (ratio === '1:1') {
+        cameraHeight = screenWidth;
     }
 
-    async function handleCapture() {
-        if (mode === 'picture') {
-            await takePicture();
-        } else {
-            isRecording ? stopRecording() : startRecording();
-        }
+    if (processedPhoto) {
+        return (
+            <Preview
+                uri={processedPhoto}
+                onReset={() => setProcessedPhoto(null)}
+                onSave={handleSave}
+            />
+        );
     }
-
-    async function takePicture() {
-        if (cameraRef.current) {
-            try {
-                // 1. Capturar la foto
-                const photo = await cameraRef.current.takePictureAsync();
-                if (photo) {
-                    // Nota: expo-image-manipulator en esta versión solo soporta transformaciones geométricas
-                    // No podemos aplicar matrices de color o contraste permanentemente de forma sencilla.
-                    // Guardamos la foto original.
-                    setLastPhoto(photo.uri);
-                    const asset = await saveToAlbum(photo.uri);
-                    if (asset) setLastAssetId(asset.id);
-                }
-            } catch (error) {
-                console.error("Error capturando foto:", error);
-            }
-        }
-    }
-
-    async function startRecording() {
-        if (cameraRef.current) {
-            try {
-                setIsRecording(true);
-                const video = await cameraRef.current.recordAsync();
-                if (video) {
-                    setLastPhoto(video.uri); // Para miniatura (no se puede aplicar filtro a video fácilmente en JS)
-                    const asset = await saveToAlbum(video.uri);
-                    if (asset) setLastAssetId(asset.id);
-                }
-            } catch (error) {
-                console.error("Error video:", error);
-                setIsRecording(false);
-            }
-        }
-    }
-
-    function stopRecording() {
-        if (cameraRef.current && isRecording) {
-            cameraRef.current.stopRecording();
-            setIsRecording(false);
-        }
-    }
-
-    async function saveToAlbum(uri: string): Promise<MediaLibrary.Asset | null> {
-        try {
-            const { status } = await MediaLibrary.requestPermissionsAsync();
-            if (status !== 'granted') return null;
-            const asset = await MediaLibrary.createAssetAsync(uri);
-            return asset;
-        } catch (error) {
-            console.error("Error guardando:", error);
-            return null;
-        }
-    }
-
-    const shareMedia = async () => {
-        if (lastPhoto) {
-            const isAvailable = await Sharing.isAvailableAsync();
-            if (isAvailable) {
-                await Sharing.shareAsync(lastPhoto);
-            } else {
-                Alert.alert("Error", "Compartir no está disponible en este dispositivo");
-            }
-        }
-    };
-
-    const deleteMedia = async () => {
-        if (lastAssetId) {
-            Alert.alert(
-                "Eliminar archivo",
-                "¿Estás seguro de que quieres eliminar esta foto/video de la galería?",
-                [
-                    { text: "Cancelar", style: "cancel" },
-                    {
-                        text: "Eliminar",
-                        style: "destructive",
-                        onPress: async () => {
-                            try {
-                                const { status } = await MediaLibrary.requestPermissionsAsync();
-                                if (status === 'granted') {
-                                    await MediaLibrary.deleteAssetsAsync([lastAssetId]);
-                                    setLastPhoto(null);
-                                    setLastAssetId(null);
-                                    setIsPreviewOpen(false);
-                                }
-                            } catch (error) {
-                                console.error("Error eliminando:", error);
-                            }
-                        }
-                    }
-                ]
-            );
-        }
-    };
 
     return (
         <View style={styles.container}>
-            <View style={{ flex: 1 }}>
-                {/* Cámara como fondo base */}
+            <View style={styles.topSpacer} />
+            <Animated.View style={[
+                styles.cameraContainer,
+                {
+                    opacity: fadeAnim,
+                    height: cameraHeight,
+                    maxHeight: height - 260 // Ensure it doesn't overlap the bottom section
+                }
+            ]}>
                 <CameraView
-                    style={StyleSheet.absoluteFill}
-                    facing={facing}
+                    style={styles.camera}
                     ref={cameraRef}
+                    facing={facing}
+                    flash={flash}
                     zoom={zoom}
-                    mode={mode}
-                />
+                    ratio={ratio as any}
+                    mode={activeMode === 'Vídeo' ? 'video' : 'picture'}
+                >
+                    <TopBar
+                        flash={flash}
+                        timer={timer}
+                        ratio={ratio}
+                        onToggleFlash={toggleFlash}
+                        onToggleTimer={setTimer}
+                        onToggleRatio={setRatio}
+                        onOpenSettings={() => setIsSettingsVisible(true)}
+                    />
 
-                {/* Capa de Filtro Visual (Overlay) */}
-                <View
-                    style={[
-                        StyleSheet.absoluteFill,
-                        { backgroundColor: filterConfig.tint, opacity: filterConfig.tintOpacity }
-                    ]}
-                    pointerEvents="none"
-                />
-
-                {/* Interfaz de Usuario (Overlay superior e inferior) */}
-                <View style={styles.mainOverlay}>
-                    <View style={styles.overlayUI}>
-                        {/* Selector de Modo */}
-                        <View style={styles.modeSelector}>
-                            <TouchableOpacity onPress={() => setMode('picture')}>
-                                <Text style={[styles.modeText, mode === 'picture' && styles.activeMode]}>FOTO</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity onPress={() => setMode('video')}>
-                                <Text style={[styles.modeText, mode === 'video' && styles.activeMode]}>VIDEO</Text>
-                            </TouchableOpacity>
-                        </View>
-
-                        {/* Botón de Ajustes (Tuerca) */}
-                        <TouchableOpacity style={styles.settingsButton} onPress={pickCustomConfig}>
-                            <Ionicons name="settings-sharp" size={28} color="white" />
-                        </TouchableOpacity>
-                    </View>
-
-                    <View style={styles.controlsWrapper}>
-                        {/* Slider Zoom */}
-                        <View style={styles.zoomContainer}>
-                            <Text style={styles.zoomText}>{(zoom * 10 + 1).toFixed(1)}x</Text>
-                            <Slider
-                                style={{ width: 250, height: 40 }}
-                                minimumValue={0}
-                                maximumValue={0.5}
-                                minimumTrackTintColor="#FFFFFF"
-                                maximumTrackTintColor="rgba(255,255,255,0.3)"
-                                thumbTintColor="#FFFFFF"
-                                value={zoom}
-                                onValueChange={setZoom}
-                            />
-                        </View>
-
-                        <View style={styles.buttonContainer}>
-                            <Animated.View style={{ opacity: sideAnim, transform: [{ translateY: sideSlide }] }}>
-                                <TouchableOpacity style={styles.iconButton} onPress={toggleCameraFacing}>
-                                    <Ionicons name="camera-reverse-outline" size={30} color="white" />
-                                </TouchableOpacity>
-                            </Animated.View>
-
-                            <Animated.View style={{ opacity: centerAnim, transform: [{ translateY: centerSlide }] }}>
-                                <TouchableOpacity style={styles.captureButton} onPress={handleCapture}>
-                                    <View style={[
-                                        styles.captureInner,
-                                        mode === 'video' && { backgroundColor: 'red' },
-                                        isRecording && { borderRadius: 5, width: 30, height: 30 }
-                                    ]} />
-                                </TouchableOpacity>
-                            </Animated.View>
-
-                            <Animated.View style={{ opacity: sideAnim, transform: [{ translateY: sideSlide }] }}>
-                                <TouchableOpacity
-                                    style={styles.iconButton}
-                                    onPress={() => lastPhoto && setIsPreviewOpen(true)}
-                                    disabled={!lastPhoto}
-                                >
-                                    {lastPhoto ? (
-                                        <Image source={{ uri: lastPhoto }} style={styles.thumbnail} />
-                                    ) : (
-                                        <View style={[styles.thumbnail, styles.thumbnailPlaceholder]}>
-                                            <Ionicons name="images-outline" size={20} color="rgba(255,255,255,0.5)" />
-                                        </View>
-                                    )}
-                                </TouchableOpacity>
-                            </Animated.View>
-                        </View>
-                    </View>
-                </View>
-            </View>
-
-            <Modal visible={isPreviewOpen} animationType="fade" transparent={true}>
-                <View style={styles.previewFullScreen}>
-                    {/* Fondo Desenfoque */}
-                    {lastPhoto && (
-                        <View style={StyleSheet.absoluteFill}>
-                            <Image source={{ uri: lastPhoto }} style={StyleSheet.absoluteFill} blurRadius={50} />
-                            <BlurView intensity={20} style={StyleSheet.absoluteFill} tint="dark" />
+                    {countdown > 0 && (
+                        <View style={styles.countdownContainer}>
+                            <Text style={styles.countdownText}>{countdown}</Text>
                         </View>
                     )}
 
-                    {/* Header */}
-                    <View style={styles.previewHeader}>
-                        <TouchableOpacity style={styles.blurActionButton} onPress={() => setIsPreviewOpen(false)}>
-                            <Ionicons name="chevron-back" size={28} color="white" />
-                        </TouchableOpacity>
+                    {isRecording && (
+                        <View style={styles.recordingTimerContainer}>
+                            <View style={styles.recordingDot} />
+                            <Text style={styles.recordingTimerText}>
+                                {new Date(recordingDuration * 1000).toISOString().substr(14, 5)}
+                            </Text>
+                        </View>
+                    )}
 
-                        <View style={{ flexDirection: 'row' }}>
-                            <TouchableOpacity style={[styles.blurActionButton, { marginRight: 15 }]} onPress={shareMedia}>
-                                <Ionicons name="share-social-outline" size={24} color="white" />
-                            </TouchableOpacity>
-                            <TouchableOpacity style={styles.blurActionButton} onPress={deleteMedia}>
-                                <Ionicons name="trash-outline" size={24} color="#ff4444" />
+                    <ZoomControls zoom={zoom} onZoomChange={setZoom} />
+                </CameraView>
+            </Animated.View>
+
+            <View style={styles.bottomSection}>
+                <ModeSelector activeMode={activeMode} onModeChange={setActiveMode} />
+                <BottomBar
+                    onCapture={handleCapture}
+                    onToggleFacing={toggleFacing}
+                    onOpenGallery={handleOpenGallery}
+                    isProcessing={isProcessing}
+                    isRecording={isRecording}
+                    mode={activeMode}
+                />
+            </View>
+
+            <Modal
+                visible={isSettingsVisible}
+                animationType="slide"
+                transparent={true}
+                onRequestClose={() => setIsSettingsVisible(false)}
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={styles.settingsModal}>
+                        <View style={styles.modalHeader}>
+                            <Text style={styles.modalTitle}>Ajustes de Filtro</Text>
+                            <TouchableOpacity onPress={() => setIsSettingsVisible(false)}>
+                                <X color="#fff" size={24} />
                             </TouchableOpacity>
                         </View>
-                    </View>
 
-                    {/* Imagen Principal */}
-                    <View style={styles.previewImageWrapper}>
-                        <Image source={{ uri: lastPhoto || '' }} style={styles.previewImage} resizeMode="contain" />
+                        <ScrollView style={styles.settingsList}>
+                            <SettingSlider
+                                label="Brillo"
+                                value={filterSettings.brightness}
+                                min={-1}
+                                max={1}
+                                step={0.1}
+                                onValueChange={(v: number) => setFilterSettings({ ...filterSettings, brightness: v })}
+                            />
+                            <SettingSlider
+                                label="Saturación"
+                                value={filterSettings.saturation}
+                                min={0}
+                                max={2}
+                                step={0.1}
+                                onValueChange={(v: number) => setFilterSettings({ ...filterSettings, saturation: v })}
+                            />
+                            <SettingSlider
+                                label="Contraste"
+                                value={filterSettings.contrast}
+                                min={0.5}
+                                max={2}
+                                step={0.1}
+                                onValueChange={(v: number) => setFilterSettings({ ...filterSettings, contrast: v })}
+                            />
+                            <SettingSlider
+                                label="Compresión"
+                                value={filterSettings.compress}
+                                min={0.1}
+                                max={1}
+                                step={0.05}
+                                onValueChange={(v: number) => setFilterSettings({ ...filterSettings, compress: v })}
+                            />
+                        </ScrollView>
+
+                        <TouchableOpacity
+                            style={styles.exportBtn}
+                            onPress={async () => {
+                                try {
+                                    const xml = serializeStyleXml(filterSettings);
+                                    const fs = FileSystem as any;
+                                    const path = (fs.cacheDirectory || fs.documentDirectory) + 'style.xml';
+                                    await FileSystem.writeAsStringAsync(path, xml);
+                                    await Sharing.shareAsync(path, {
+                                        mimeType: 'application/xml',
+                                        dialogTitle: 'Exportar style.xml',
+                                        UTI: 'public.xml'
+                                    });
+                                } catch (error) {
+                                    Alert.alert("Error", "No se pudo exportar el archivo.");
+                                }
+                            }}
+                        >
+                            <Download color="#000" size={20} />
+                            <Text style={styles.exportBtnText}>Exportar style.xml</Text>
+                        </TouchableOpacity>
                     </View>
                 </View>
             </Modal>
@@ -417,146 +336,153 @@ export default function App() {
     );
 }
 
+function SettingSlider({ label, value, min, max, step, onValueChange }: any) {
+    return (
+        <View style={styles.settingItem}>
+            <View style={styles.settingLabelRow}>
+                <Text style={styles.settingLabel}>{label}</Text>
+                <Text style={styles.settingValue}>{value.toFixed(2)}</Text>
+            </View>
+            <Slider
+                style={{ width: '100%', height: 40 }}
+                minimumValue={min}
+                maximumValue={max}
+                step={step}
+                value={value}
+                onValueChange={onValueChange}
+                minimumTrackTintColor="#8AB4F8"
+                maximumTrackTintColor="rgba(255,255,255,0.2)"
+                thumbTintColor="#8AB4F8"
+            />
+        </View>
+    );
+}
+
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#000' },
-    message: { textAlign: 'center', color: 'white' },
-    camera: { flex: 1 },
-    mainOverlay: {
-        ...StyleSheet.absoluteFillObject,
-        justifyContent: 'space-between',
-        paddingTop: 40,
-        paddingBottom: 20,
+    container: {
+        flex: 1,
+        backgroundColor: '#000',
     },
-    overlayUI: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        paddingHorizontal: 20,
-        zIndex: 10,
+    topSpacer: {
+        height: 40,
     },
-    modeSelector: {
-        flexDirection: 'row',
-        backgroundColor: 'rgba(0,0,0,0.4)',
-        borderRadius: 25,
-        padding: 4,
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
+    cameraContainer: {
+        borderRadius: 24,
+        overflow: 'hidden',
+        marginHorizontal: 8,
+        backgroundColor: '#111',
+        justifyContent: 'center',
     },
-    settingsButton: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
-        backgroundColor: 'rgba(0,0,0,0.4)',
+    camera: {
+        flex: 1,
+    },
+    bottomSection: {
+        height: 220,
+        backgroundColor: '#000',
+        justifyContent: 'center',
+    },
+    centered: {
+        flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
+        backgroundColor: '#000',
     },
-    modeText: {
-        color: 'rgba(255,255,255,0.5)',
-        fontWeight: 'bold',
-        fontSize: 12,
-        paddingHorizontal: 15,
-        paddingVertical: 8,
+    infoText: {
+        color: '#fff',
+        fontSize: 18,
     },
-    activeMode: {
-        color: 'white',
-        backgroundColor: 'rgba(255,255,255,0.2)',
-        borderRadius: 20,
-    },
-    controlsWrapper: {
-        paddingBottom: 50,
+    countdownContainer: {
+        ...StyleSheet.absoluteFillObject,
+        justifyContent: 'center',
         alignItems: 'center',
     },
-    zoomContainer: {
+    countdownText: {
+        color: '#fff',
+        fontSize: 120,
+        fontWeight: 'bold',
+        textShadowColor: 'rgba(0,0,0,0.5)',
+        textShadowOffset: { width: 2, height: 2 },
+        textShadowRadius: 10,
+    },
+    recordingTimerContainer: {
+        position: 'absolute',
+        top: 20,
+        alignSelf: 'center',
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 20,
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    recordingDot: {
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+        backgroundColor: '#ff4444',
+        marginRight: 8,
+    },
+    recordingTimerText: {
+        color: '#fff',
+        fontSize: 16,
+        fontWeight: '600',
+        fontFamily: 'monospace',
+    },
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.8)',
+        justifyContent: 'flex-end',
+    },
+    settingsModal: {
+        backgroundColor: '#1c1c1e',
+        borderTopLeftRadius: 24,
+        borderTopRightRadius: 24,
+        padding: 24,
+        maxHeight: '80%',
+    },
+    modalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
         alignItems: 'center',
         marginBottom: 20,
     },
-    zoomText: {
-        color: 'white',
-        fontSize: 12,
-        marginBottom: 5,
+    modalTitle: {
+        color: '#fff',
+        fontSize: 20,
+        fontWeight: 'bold',
     },
-    buttonContainer: {
-        flexDirection: 'row',
-        width: '100%',
-        paddingHorizontal: 40,
-        marginBottom: 50,
-        justifyContent: 'space-between',
-        alignItems: 'flex-end',
+    settingsList: {
+        marginBottom: 20,
     },
-    iconButton: {
-        width: 50,
-        height: 50,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginBottom: 15,
+    settingItem: {
+        marginBottom: 16,
     },
-    captureButton: {
-        width: 80,
-        height: 80,
-        borderRadius: 40,
-        borderWidth: 4,
-        borderColor: 'white',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    captureInner: {
-        width: 66,
-        height: 66,
-        borderRadius: 33,
-        backgroundColor: 'white',
-    },
-    thumbnail: {
-        width: 45,
-        height: 45,
-        borderRadius: 8,
-        borderWidth: 2,
-        borderColor: 'white',
-    },
-    thumbnailPlaceholder: {
-        width: 45,
-        height: 45,
-        borderRadius: 8,
-        borderWidth: 2,
-        borderColor: 'rgba(255,255,255,0.3)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        backgroundColor: 'rgba(0,0,0,0.3)',
-    },
-
-    // Preview Modal Premium
-    previewFullScreen: {
-        flex: 1,
-        backgroundColor: 'black'
-    },
-    previewHeader: {
-        position: 'absolute',
-        top: 50,
-        left: 0,
-        right: 0,
+    settingLabelRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
-        paddingHorizontal: 20,
-        zIndex: 10,
+        marginBottom: 4,
     },
-    blurActionButton: {
-        width: 50,
-        height: 50,
-        borderRadius: 25,
-        backgroundColor: 'rgba(255,255,255,0.15)',
+    settingLabel: {
+        color: 'rgba(255,255,255,0.7)',
+        fontSize: 14,
+    },
+    settingValue: {
+        color: '#8AB4F8',
+        fontSize: 14,
+        fontWeight: 'bold',
+    },
+    exportBtn: {
+        backgroundColor: '#8AB4F8',
+        flexDirection: 'row',
+        padding: 16,
+        borderRadius: 12,
         justifyContent: 'center',
         alignItems: 'center',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.2)',
+        gap: 8,
     },
-    previewImageWrapper: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    previewImage: {
-        width: width,
-        height: height * 0.8,
+    exportBtnText: {
+        color: '#000',
+        fontWeight: 'bold',
+        fontSize: 16,
     },
 });
